@@ -1,0 +1,657 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CloudFormation Template for Bronze, Silver, and Gold S3 Buckets with Networking Enhancements and Glue Processing
+
+Resources:
+  # VPC
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: DataProcessingVPC
+
+  LambdaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow Glue to access S3, Redshift, and NAT Gateway
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 10.0.0.0/16  # Restrict to VPC CIDR
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0  # Allow internet access only for outbound traffic
+      Tags:
+        - Key: Name
+          Value: LambdaSecurityGroup
+
+
+  # Subnets
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.1.0/24
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      Tags:
+        - Key: Name
+          Value: PublicSubnet
+
+  PrivateSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.2.0/24
+      MapPublicIpOnLaunch: false
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      Tags:
+        - Key: Name
+          Value: PrivateSubnet
+
+  # Internet Gateway
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: DataProcessingIGW
+
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  # NAT Gateway (For Outbound Internet Access from Private Subnet)
+  ElasticIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt ElasticIP.AllocationId
+      SubnetId: !Ref PublicSubnet
+
+  # Route Tables
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: PublicRouteTable
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: PrivateRouteTable
+
+  PrivateRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
+
+  PublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref PublicRouteTable
+
+  PrivateSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet
+      RouteTableId: !Ref PrivateRouteTable
+
+  # VPC Endpoint for S3
+  S3VPCEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.s3"
+      VpcId: !Ref VPC
+      RouteTableIds:
+        - !Ref PrivateRouteTable
+
+  # Bronze Bucket
+  BronzeS3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: bronze-s3-nyc
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption: 
+        ServerSideEncryptionConfiguration: 
+        - ServerSideEncryptionByDefault:
+            SSEAlgorithm: AES256  
+      LifecycleConfiguration:
+        Rules:
+          - Status: Enabled
+            Transitions:
+              - StorageClass: INTELLIGENT_TIERING
+                TransitionInDays: 30
+              - StorageClass: GLACIER
+                TransitionInDays: 365
+            ExpirationInDays: 730
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  # Silver Bucket
+  SilverS3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: silver-s3-nyc
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption: 
+        ServerSideEncryptionConfiguration: 
+        - ServerSideEncryptionByDefault:
+            SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Status: Enabled
+            Transitions:
+              - StorageClass: INTELLIGENT_TIERING
+                TransitionInDays: 30
+              - StorageClass: GLACIER
+                TransitionInDays: 365
+            ExpirationInDays: 730
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  GoldS3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: gold-s3-nyc
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption: 
+        ServerSideEncryptionConfiguration: 
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Status: Enabled
+            Transitions:
+              - StorageClass: INTELLIGENT_TIERING
+                TransitionInDays: 30
+              - StorageClass: GLACIER
+                TransitionInDays: 365
+            ExpirationInDays: 730
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false   
+        BlockPublicPolicy: false 
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  GoldS3BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref GoldS3Bucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: "s3:GetObject"
+            Resource: !Sub "arn:aws:s3:::${GoldS3Bucket}/*"
+            Principal:
+              AWS:  !Sub "arn:aws:iam::${AWS::AccountId}:role/LabRole"
+
+  SecretsManagerVPCEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.secretsmanager"
+      VpcId: !Ref VPC
+      VpcEndpointType: Interface  # Change the endpoint type to Interface
+      SubnetIds:
+        - !Ref PrivateSubnet
+      SecurityGroupIds:
+        - !Ref LambdaSecurityGroup
+
+  DLQSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: DLQURL
+      SecretString: !Sub '{"DLQ_URL": "${LambdaDLQ}"}'
+
+  # Lambda Dead Letter Queue (DLQ)
+  LambdaDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: LambdaDLQ
+
+  # Lambda Function to Fetch Data for Multiple Months
+  FetchAndUploadParquetLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: FetchAndUploadParquetLambda
+      Handler: index.lambda_handler
+      Runtime: python3.9
+      Timeout: 120
+      MemorySize: 512
+      VpcConfig:
+        SubnetIds:
+          - !Ref PrivateSubnet
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+      Code:
+        ZipFile: |
+          import boto3
+          import requests
+          import os
+          import logging
+          from botocore.exceptions import ClientError
+
+          # Initialize logging
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+
+          def lambda_handler(event, context):
+              s3_bucket_name = os.environ['S3_BUCKET_NAME']
+              s3_client = boto3.client('s3')
+              dlq_url = os.environ['DLQ_URL']
+
+              for month in range(1, 9):  # Adjust range as needed
+                  month_str = f"{month:02d}"
+                  file_url = f"https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_2024-{month_str}.parquet"
+                  s3_key = f"bronze/year=2024/month={month_str}/yellow_tripdata_2024-{month_str}.parquet"
+                  
+                  # Check if file already exists in S3
+                  try:
+                      s3_client.head_object(Bucket=s3_bucket_name, Key=s3_key)
+                      logger.info(f"File already exists: {s3_key}. Skipping download.")
+                      continue
+                  except ClientError as e:
+                      if e.response['Error']['Code'] != '404':
+                          logger.error(f"Unexpected error while checking file existence: {str(e)}")
+                          raise
+
+                  # Download file and upload to S3
+                  try:
+                      response = requests.get(file_url, stream=True, timeout=30)
+                      response.raise_for_status()
+                      
+                      # Upload file to S3
+                      s3_client.put_object(
+                          Bucket=s3_bucket_name,
+                          Key=s3_key,
+                          Body=response.content,
+                          ContentType='application/octet-stream'
+                      )
+                      logger.info(f"Successfully uploaded file to {s3_key}")
+                  
+
+                  except requests.exceptions.RequestException as req_err:
+                      logger.error(f"Error downloading file from {file_url}: {str(req_err)}")
+                      send_to_dlq(dlq_url, str(req_err))
+                  except ClientError as s3_err:
+                      logger.error(f"Error uploading file to S3: {str(s3_err)}")
+                      send_to_dlq(dlq_url, str(s3_err))
+
+              return {"statusCode": 200, "body": "Upload completed."}
+
+          def send_to_dlq(dlq_url, error_message):
+              sqs = boto3.client('sqs')
+              message = {
+                  'errorMessage': error_message
+              }
+              sqs.send_message(
+                  QueueUrl=dlq_url,
+                  MessageBody=str(message)
+              )
+        
+      Environment:
+        Variables:
+          S3_BUCKET_NAME: !Ref BronzeS3Bucket
+          DLQ_URL: !Sub "{{resolve:secretsmanager:DLQURL:SecretString:DLQ_URL}}"
+      Role: !Sub "arn:aws:iam::${AWS::AccountId}:role/LabRole"
+      Layers:
+        - "arn:aws:lambda:us-east-1:770693421928:layer:Klayers-p39-requests:19"
+
+  FetchGoldFilesLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: FetchGoldFilesLambda
+      Handler: index.lambda_handler
+      Runtime: python3.9
+      Timeout: 120
+      MemorySize: 512
+      VpcConfig:
+        SubnetIds:
+          - !Ref PrivateSubnet
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import requests
+          import base64
+          import os
+
+          # Initialize the S3 client
+          s3_client = boto3.client('s3')
+
+          def lambda_handler(event, context):
+              # Fetch GCF URL and S3 bucket name from environment variables
+              gcf_url = os.environ['GCF_URL']
+              bucket_name = os.environ['GOLD_S3_BUCKET']
+
+              try:
+                  # List objects in the S3 Gold bucket
+                  response = s3_client.list_objects_v2(Bucket=bucket_name, Prefix='')  # Optionally use prefix to filter files
+                  files = []
+
+                  if 'Contents' in response:
+                      for item in response['Contents']:
+                          file_key = item['Key']
+                          # Download the file from S3
+                          file_obj = s3_client.get_object(Bucket=bucket_name, Key=file_key)
+                          file_content = file_obj['Body'].read()
+
+                          # Encode file content in base64 (only if needed for GCF)
+                          encoded_file = base64.b64encode(file_content).decode('utf-8')
+
+                          # Add the file content to the payload
+                          files.append({
+                              'file_name': file_key,
+                              'file_content': encoded_file
+                          })
+
+                  # If no files found, return an error
+                  if not files:
+                      return {
+                          'statusCode': 400,
+                          'body': 'No files found in the S3 Gold bucket'
+                      }
+
+                  # Prepare the payload to send to the Google Cloud Function
+                  payload = {
+                      "files": files  # Ensure 'files' is the expected key in the GCF
+                  }
+
+                  # Send POST request to Google Cloud Function
+                  response = requests.post(gcf_url, json=payload)
+
+                  # Log the response from GCF
+                  print(f"Response Status Code: {response.status_code}")
+                  print(f"Response Body: {response.text}")
+
+                  return {
+                      'statusCode': response.status_code,
+                      'body': response.text
+                  }
+
+              except Exception as e:
+                  print(f"Error retrieving files from S3: {str(e)}")
+                  return {
+                      'statusCode': 500,
+                      'body': f"Error retrieving files from S3: {str(e)}"
+                  }
+      Environment:
+        Variables:
+          GOLD_S3_BUCKET: !Ref GoldS3Bucket  # Reference the Gold S3 bucket name
+          GCF_URL: !Sub "https://us-central1-csci-5408-data-management.cloudfunctions.net/S3LoadBigQueryFunction"  # Replace with actual GCF URL
+
+      Role: !Sub "arn:aws:iam::${AWS::AccountId}:role/LabRole"
+      Layers:
+        - "arn:aws:lambda:us-east-1:770693421928:layer:Klayers-p39-requests:19"
+
+
+  # AWS Glue Job for Processing Data from Bronze to Silver
+  BronzeToSilverGlueJob:
+    Type: AWS::Glue::Job
+    Properties:
+      Name: BronzeToSilverETL
+      Role: !Sub "arn:aws:iam::${AWS::AccountId}:role/LabRole"
+      GlueVersion: "3.0"
+      Command:
+        Name: "glueetl"
+        ScriptLocation: !Sub "s3://glue-scripts-nyc/bronze_to_silver_script.py"
+        PythonVersion: "3"
+      DefaultArguments:
+        "--TempDir": !Sub "s3://${SilverS3Bucket}/temp/"
+        "--enable-continuous-cloudwatch-log": "true"
+        "--DLQ_URL": !Sub "{{resolve:secretsmanager:DLQURL:SecretString:DLQ_URL}}"
+        "--enable-job-bookmarks": "true"
+        "--enable-metrics": "true"
+      MaxCapacity: 10
+      Timeout: 60
+
+  # AWS Glue Job for Processing Data from Silver to Gold
+  SilverToGoldGlueJob:
+    Type: AWS::Glue::Job
+    Properties:
+      Name: SilverToGoldETL
+      Role: !Sub "arn:aws:iam::${AWS::AccountId}:role/LabRole"
+      GlueVersion: "3.0"
+      Command:
+        Name: "glueetl"
+        ScriptLocation: !Sub "s3://glue-scripts-nyc/silver_to_gold_script.py"
+        PythonVersion: "3"
+      DefaultArguments:
+        "--TempDir": !Sub "s3://${GoldS3Bucket}/temp/"
+        "--enable-continuous-cloudwatch-log": "true"
+        "--DLQ_URL": !Sub "{{resolve:secretsmanager:DLQURL:SecretString:DLQ_URL}}"
+        "--enable-job-bookmarks": "true"
+        "--enable-metrics": "true"
+      MaxCapacity: 10
+      Timeout: 120
+
+  DataPipelineStateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: DataPipeline
+      RoleArn: !Sub "arn:aws:iam::${AWS::AccountId}:role/LabRole"
+      DefinitionString: !Sub |
+        {
+          "Comment": "Data pipeline workflow orchestrating Lambda, Glue jobs, and DLQ for failure handling",
+          "StartAt": "Fetch Data Lambda",
+          "States": {
+            "Fetch Data Lambda": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "OutputPath": "$.Payload",
+              "Parameters": {
+                "Payload.$": "$",
+                "FunctionName": "arn:aws:lambda:us-east-1:961391699114:function:FetchAndUploadParquetLambda:$LATEST"
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "Lambda.ServiceException",
+                    "Lambda.AWSLambdaException",
+                    "Lambda.SdkClientException",
+                    "Lambda.TooManyRequestsException"
+                  ],
+                  "IntervalSeconds": 1,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2
+                }
+              ],
+              "Catch": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "ResultPath": "$.error",
+                  "Next": "DLQ Failure Handler"
+                }
+              ],
+              "Next": "Wait for Bronze to Silver"
+            },
+            "Wait for Bronze to Silver": {
+              "Type": "Wait",
+              "Seconds": 120,
+              "Next": "Bronze to Silver Glue Job"
+            },
+            "Bronze to Silver Glue Job": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::glue:startJobRun",
+              "Parameters": {
+                "JobName": "BronzeToSilverETL",
+                "Arguments": {
+                  "--TempDir": "s3://silver-s3-nyc/temp/",
+                  "--DLQ_URL": "https://sqs.us-east-1.amazonaws.com/961391699114/LambdaDLQ"
+                }
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "Glue.ServiceException",
+                    "Glue.AWSGlueException",
+                    "Glue.SdkClientException"
+                  ],
+                  "IntervalSeconds": 60,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2
+                }
+              ],
+              "Catch": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "ResultPath": "$.error",
+                  "Next": "DLQ Failure Handler"
+                }
+              ],
+              "Next": "Wait for Silver to Gold"
+            },
+            "Wait for Silver to Gold": {
+              "Type": "Wait",
+              "Seconds": 300,
+              "Next": "Silver to Gold Glue Job"
+            },
+            "Silver to Gold Glue Job": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::glue:startJobRun",
+              "Parameters": {
+                "JobName": "SilverToGoldETL",
+                "Arguments": {
+                  "--TempDir": "s3://gold-s3-nyc/temp/",
+                  "--DLQ_URL": "https://sqs.us-east-1.amazonaws.com/961391699114/LambdaDLQ"
+                }
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "Glue.ServiceException",
+                    "Glue.AWSGlueException",
+                    "Glue.SdkClientException"
+                  ],
+                  "IntervalSeconds": 60,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2
+                }
+              ],
+              "Catch": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "ResultPath": "$.error",
+                  "Next": "DLQ Failure Handler"
+                }
+              ],
+              "Next": "Wait for Fetch Gold Files Lambda"
+            },
+            "Wait for Fetch Gold Files Lambda": {
+              "Type": "Wait",
+              "Seconds": 60,
+              "Next": "Fetch Gold Files Lambda"
+            },
+            "Fetch Gold Files Lambda": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "arn:aws:lambda:us-east-1:961391699114:function:FetchGoldFilesLambda:$LATEST"
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "Lambda.ServiceException",
+                    "Lambda.AWSLambdaException",
+                    "Lambda.SdkClientException",
+                    "Lambda.TooManyRequestsException"
+                  ],
+                  "IntervalSeconds": 1,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2
+                }
+              ],
+              "Catch": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "ResultPath": "$.error",
+                  "Next": "DLQ Failure Handler"
+                }
+              ],
+              "End": true
+            },
+            "DLQ Failure Handler": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "arn:aws:lambda:us-east-1:961391699114:function:SendToDLQLambda:$LATEST",
+                "Payload": {
+                  "ErrorDetails.$": "$.error"
+                }
+              },
+              "End": true
+            }
+          }
+        }
+
+Outputs:
+  BronzeS3BucketName:
+    Value: !Ref BronzeS3Bucket
+  FetchAndUploadParquetLambdaARN:
+    Value: !GetAtt FetchAndUploadParquetLambda.Arn
+    Export:
+      Name: FetchAndUploadLambdaARN
+  BronzeToSilverGlueJobName:
+    Value: !Ref BronzeToSilverGlueJob
+    Export:
+      Name: BronzeToSilverETLJobName
+  SilverToGoldGlueJobName:
+    Value: !Ref SilverToGoldGlueJob
+    Export:
+      Name: SilverToGoldETLJobName
+  S3VPCEndpointId:
+    Value: !Ref S3VPCEndpoint
+    Export:
+      Name: S3VPCEndpointId
+  SecretsManagerVPCEndpointId:
+    Value: !Ref SecretsManagerVPCEndpoint
+    Export:
+      Name: SecretsManagerVPCEndpointId
