@@ -30,7 +30,7 @@ The architecture focuses on modularity, scalability, and fault tolerance, enabli
 ![Data Interaction Sequence Diagram](Cloud%20Architecture%20-%20Data%20Interaction%20Sequence%20Diagram.png)
 
 ### Deployed End User Dashboard URL
-![Public Dashboard URL] (https://lookerstudio.google.com/reporting/536592fb-0fb0-4e24-9183-458968ae1678)
+[Public Dashboard URL](https://lookerstudio.google.com/reporting/536592fb-0fb0-4e24-9183-458968ae1678)
 
 The architecture combines AWS services for ETL and Google Cloud for analytics. Key components include:
 
