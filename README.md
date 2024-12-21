@@ -132,22 +132,13 @@ The architecture combines AWS services for ETL and Google Cloud for analytics. K
 
 ---
 
-## File Descriptions
-
-- **`Architecture Diagram - AWS.png`**: Visual overview of the AWS cloud architecture.
-- **`Cloud Architecture - Data Interaction Sequence Diagram.png`**: Sequence diagram illustrating data flow and service interactions.
-- **`CloudFormationScript.yml`**: AWS CloudFormation template for pipeline deployment.
-- **`CSCI5411_Term_Assignment_B00980674.pdf`**: Detailed project report explaining the pipeline and use case.
-
----
-
 ## Future Enhancements
 
 1. **Real-Time Processing**:
    - Integrate Amazon Kinesis for real-time data ingestion.
 2. **Enhanced Monitoring**:
    - Use AWS X-Ray for distributed tracing and debugging.
-3. **Automated Testing**:
-   - Implement infrastructure testing with AWS TaskCat.
+3. **Automated Retrying**:
+   - Implement infrastructure which retries the ETL pipeline with a fix.
 
 ---
