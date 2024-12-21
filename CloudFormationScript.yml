@@ -473,7 +473,7 @@ Resources:
       RoleArn: !Sub "arn:aws:iam::${AWS::AccountId}:role/LabRole"
       DefinitionString: !Sub |
         {
-          "Comment": "Data pipeline workflow orchestrating Lambda, Glue jobs, and DLQ for failure handling",
+          "Comment": "Data pipeline workflow orchestrating Lambda, Glue jobs, SNS notifications, and DLQ for failure handling",
           "StartAt": "Fetch Data Lambda",
           "States": {
             "Fetch Data Lambda": {
@@ -499,11 +499,9 @@ Resources:
               ],
               "Catch": [
                 {
-                  "ErrorEquals": [
-                    "States.ALL"
-                  ],
+                  "ErrorEquals": ["States.ALL"],
                   "ResultPath": "$.error",
-                  "Next": "DLQ Failure Handler"
+                  "Next": "Failure Handler"
                 }
               ],
               "Next": "Wait for Bronze to Silver"
@@ -537,11 +535,9 @@ Resources:
               ],
               "Catch": [
                 {
-                  "ErrorEquals": [
-                    "States.ALL"
-                  ],
+                  "ErrorEquals": ["States.ALL"],
                   "ResultPath": "$.error",
-                  "Next": "DLQ Failure Handler"
+                  "Next": "Failure Handler"
                 }
               ],
               "Next": "Wait for Silver to Gold"
@@ -575,11 +571,9 @@ Resources:
               ],
               "Catch": [
                 {
-                  "ErrorEquals": [
-                    "States.ALL"
-                  ],
+                  "ErrorEquals": ["States.ALL"],
                   "ResultPath": "$.error",
-                  "Next": "DLQ Failure Handler"
+                  "Next": "Failure Handler"
                 }
               ],
               "Next": "Wait for Fetch Gold Files Lambda"
@@ -610,28 +604,50 @@ Resources:
               ],
               "Catch": [
                 {
-                  "ErrorEquals": [
-                    "States.ALL"
-                  ],
+                  "ErrorEquals": ["States.ALL"],
                   "ResultPath": "$.error",
-                  "Next": "DLQ Failure Handler"
+                  "Next": "Failure Handler"
                 }
               ],
               "End": true
             },
-            "DLQ Failure Handler": {
-              "Type": "Task",
-              "Resource": "arn:aws:states:::lambda:invoke",
-              "Parameters": {
-                "FunctionName": "arn:aws:lambda:us-east-1:961391699114:function:SendToDLQLambda:$LATEST",
-                "Payload": {
-                  "ErrorDetails.$": "$.error"
+            "Failure Handler": {
+              "Type": "Parallel",
+              "Branches": [
+                {
+                  "StartAt": "Publish SNS",
+                  "States": {
+                    "Publish SNS": {
+                      "Type": "Task",
+                      "Resource": "arn:aws:states:::sns:publish",
+                      "Parameters": {
+                        "Message.$": "$.error",
+                        "TopicArn": "arn:aws:sns:us-east-1:961391699114:StepFunctionAlarmTopic"
+                      },
+                      "End": true
+                    }
+                  }
+                },
+                {
+                  "StartAt": "Send to DLQ",
+                  "States": {
+                    "Send to DLQ": {
+                      "Type": "Task",
+                      "Resource": "arn:aws:states:::sqs:sendMessage",
+                      "Parameters": {
+                        "QueueUrl": "https://sqs.us-east-1.amazonaws.com/961391699114/LambdaDLQ",
+                        "MessageBody.$": "$.error"
+                      },
+                      "End": true
+                    }
+                  }
                 }
-              },
+              ],
               "End": true
             }
           }
         }
+
 
   ScheduledRule:
     Type: AWS::Events::Rule
